@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -36,6 +36,10 @@
 #define FFTFilter_h
 
 #include <ffts.h>
+
+#ifdef HAVE_CLFFT
+#include <clFFT.h>
+#endif
 
 class FFTFilter : public PeakDetectionFilter
 {
@@ -78,25 +82,44 @@ public:
 	PROTOCOL_DECODER_INITPROC(FFTFilter)
 
 protected:
-	void NormalizeOutputLog(AnalogWaveform* cap, size_t nouts, size_t npoints);
-	void NormalizeOutputLogAVX2(AnalogWaveform* cap, size_t nouts, size_t npoints);
-	void NormalizeOutputLinear(AnalogWaveform* cap, size_t nouts, size_t npoints);
-	void NormalizeOutputLinearAVX2(AnalogWaveform* cap, size_t nouts, size_t npoints);
+	void NormalizeOutputLog(AnalogWaveform* cap, size_t nouts, float scale);
+	void NormalizeOutputLogAVX2(AnalogWaveform* cap, size_t nouts, float scale);
+	void NormalizeOutputLinear(AnalogWaveform* cap, size_t nouts, float scale);
+	void NormalizeOutputLinearAVX2(AnalogWaveform* cap, size_t nouts, float scale);
 
 	void ReallocateBuffers(size_t npoints_raw, size_t npoints, size_t nouts);
 
-	void DoRefresh(AnalogWaveform* din, double fs_per_sample, size_t npoints, size_t nouts, bool log_output);
+	void DoRefresh(
+		AnalogWaveform* din,
+		std::vector<EmptyConstructorWrapper<float>, AlignedAllocator<EmptyConstructorWrapper<float>, 64>>& data,
+		double fs_per_sample, size_t npoints, size_t nouts, bool log_output);
 
 	size_t m_cachedNumPoints;
 	size_t m_cachedNumPointsFFT;
-	float* m_rdin;
-	float* m_rdout;
+	std::vector<float, AlignedAllocator<float, 64> > m_rdinbuf;
+	std::vector<float, AlignedAllocator<float, 64> > m_rdoutbuf;
 	ffts_plan_t* m_plan;
 
 	float m_range;
 	float m_offset;
 
 	std::string m_windowName;
+
+	#ifdef HAVE_CLFFT
+	cl::CommandQueue* m_queue;
+
+	clfftPlanHandle m_clfftPlan;
+
+	cl::Program* m_windowProgram;
+	cl::Kernel* m_rectangularWindowKernel;
+	cl::Kernel* m_cosineSumWindowKernel;
+	cl::Kernel* m_blackmanHarrisWindowKernel;
+
+	cl::Program* m_normalizeProgram;
+	cl::Kernel* m_normalizeMagnitudeKernel;
+	cl::Kernel* m_normalizeLogMagnitudeKernel;
+
+	#endif
 };
 
 #endif

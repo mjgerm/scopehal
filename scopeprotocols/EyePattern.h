@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -166,10 +166,55 @@ public:
 		ALIGN_EDGE
 	};
 
+	enum UIMode
+	{
+		MODE_AUTO,
+		MODE_FIXED
+	};
+
 	PROTOCOL_DECODER_INITPROC(EyePattern)
 
 protected:
 	void DoMaskTest(EyeWaveform* cap);
+
+	void SparsePackedInnerLoop(
+		AnalogWaveform* waveform,
+		std::vector<int64_t>& clock_edges,
+		int64_t* data,
+		size_t wend,
+		size_t cend,
+		int32_t xmax,
+		int32_t ymax,
+		float xtimescale,
+		float yscale,
+		float yoff
+		);
+
+	void DensePackedInnerLoop(
+		AnalogWaveform* waveform,
+		std::vector<int64_t>& clock_edges,
+		int64_t* data,
+		size_t wend,
+		size_t cend,
+		int32_t xmax,
+		int32_t ymax,
+		float xtimescale,
+		float yscale,
+		float yoff
+		);
+
+	void DensePackedInnerLoopAVX2(
+		AnalogWaveform* waveform,
+		std::vector<int64_t>& clock_edges,
+		int64_t* data,
+		size_t wend,
+		size_t cend,
+		int32_t xmax,
+		int32_t ymax,
+		float xtimescale,
+		float yscale,
+		float yoff
+		);
 
 	size_t m_height;
 	size_t m_width;
@@ -185,6 +230,8 @@ protected:
 	std::string m_vmodeName;
 	std::string m_rangeName;
 	std::string m_clockAlignName;
+	std::string m_rateModeName;
+	std::string m_rateName;
 
 	EyeMask m_mask;
 };

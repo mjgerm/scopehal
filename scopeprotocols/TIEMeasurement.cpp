@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -63,6 +63,8 @@ bool TIEMeasurement::ValidateChannel(size_t i, StreamDescriptor stream)
 		return false;
 
 	if( (i == 0) && (stream.m_channel->GetType() == OscilloscopeChannel::CHANNEL_TYPE_ANALOG) )
+		return true;
+	if( (i == 0) && (stream.m_channel->GetType() == OscilloscopeChannel::CHANNEL_TYPE_DIGITAL) )//allow digital clocks
 		return true;
 	if( (i == 1) && (stream.m_channel->GetType() == OscilloscopeChannel::CHANNEL_TYPE_DIGITAL) )
 		return true;
@@ -130,16 +132,21 @@ void TIEMeasurement::Refresh()
 	}
 
 	//Get the input data
-	auto clk = GetAnalogInputWaveform(0);
+	auto clk_analog = GetAnalogInputWaveform(0);
+	auto clk_digital = GetDigitalInputWaveform(0);
+	WaveformBase* clk = GetInputWaveform(0);
 	auto golden = GetDigitalInputWaveform(1);
-	size_t len = min(clk->m_samples.size(), golden->m_samples.size());
+	size_t len = min(clk->m_offsets.size(), golden->m_offsets.size());
 
 	//Create the output
 	auto cap = new AnalogWaveform;
 
 	//Timestamps of the edges
 	vector<int64_t> edges;
-	FindZeroCrossings(clk, m_parameters[m_threshname].GetFloatVal(), edges);
+	if(clk_analog)
+		FindZeroCrossings(clk_analog, m_parameters[m_threshname].GetFloatVal(), edges);
+	else
+		FindZeroCrossings(clk_digital, edges);
 
 	//Ignore edges before things have stabilized
 	int64_t skip_time = m_parameters[m_skipname].GetIntVal();
@@ -198,7 +205,6 @@ void TIEMeasurement::Refresh()
 		//edge for TIE measurements.
 		int64_t golden_period = next_edge - prev_edge;
 		int64_t golden_center = prev_edge + golden_period/2;
-		golden_center += 1.5*clk->m_timescale;			//TODO: why is this needed?
 		int64_t tie = atime - golden_center;
 
 		//Ignore edges before things have stabilized
@@ -215,12 +221,12 @@ void TIEMeasurement::Refresh()
 			vmax = max(vmax, tie);
 			vmin = min(vmin, tie);
 
-			cap->m_offsets.push_back(atime);
+			cap->m_offsets.push_back(golden_center);
 			cap->m_durations.push_back(0);
 			cap->m_samples.push_back(tie);
 		}
 
-		tlast = atime;
+		tlast = golden_center;
 	}
 
 	SetData(cap, 0);
@@ -228,7 +234,8 @@ void TIEMeasurement::Refresh()
 	//Copy start time etc from the input
 	cap->m_timescale = 1;
 	cap->m_startTimestamp = clk->m_startTimestamp;
-	cap->m_startFemtoseconds = 0;
+	cap->m_startFemtoseconds = clk->m_startFemtoseconds;
+	cap->m_triggerPhase = 0;
 
 	//Calculate bounds
 	m_max = max(m_max, (float)vmax);

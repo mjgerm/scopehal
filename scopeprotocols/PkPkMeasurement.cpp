@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -112,6 +112,8 @@ void PkPkMeasurement::Refresh()
 	//Get the input data
 	auto din = GetAnalogInputWaveform(0);
 	size_t len = din->m_samples.size();
+
+	m_yAxisUnit = GetInput(0).m_channel->GetYAxisUnits();
 
 	//Figure out the nominal midpoint of the waveform
 	float top = GetTopVoltage(din);

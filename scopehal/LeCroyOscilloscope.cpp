@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopehal v0.1                                                                                                     *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -31,7 +31,6 @@
 #include "LeCroyOscilloscope.h"
 #include "base64.h"
 #include <locale>
-#include <immintrin.h>
 #include <omp.h>
 
 #include "DropoutTrigger.h"
@@ -58,6 +57,7 @@ LeCroyOscilloscope::LeCroyOscilloscope(SCPITransport* transport)
 	, m_hasI2cTrigger(false)
 	, m_hasSpiTrigger(false)
 	, m_hasUartTrigger(false)
+	, m_hasSerdesTrigger(false)
 	, m_maxBandwidth(10000)
 	, m_triggerArmed(false)
 	, m_triggerOneShot(false)
@@ -189,6 +189,17 @@ void LeCroyOscilloscope::IdentifyHardware()
 
 		m_maxBandwidth = stoi(m_model.substr(3, 2)) * 1000;
 	}
+	else if(m_model.find("SDA8") == 0)
+	{
+		if(m_model.find("ZI-B") != string::npos)
+			m_modelid = MODEL_SDA_8ZI_B;
+		else if(m_model.find("ZI-A") != string::npos)
+			m_modelid = MODEL_SDA_8ZI_A;
+		else
+			m_modelid = MODEL_SDA_8ZI;
+
+		m_maxBandwidth = stoi(m_model.substr(4, 2)) * 1000;
+	}
 	else if(m_model.find("WAVERUNNER8") == 0)
 	{
 		m_modelid = MODEL_WAVERUNNER_8K;
@@ -213,17 +224,6 @@ void LeCroyOscilloscope::IdentifyHardware()
 		m_modelid = MODEL_WAVESURFER_3K;
 		m_maxBandwidth = stoi(m_model.substr(3, 2)) * 100;
 	}
-	else if (m_vendor.compare("SIGLENT") == 0)
-	{
-		// TODO: if LeCroy and Siglent classes get split, then this should obviously
-		// move to the Siglent class.
-		if (m_model.compare(0, 4, "SDS2") == 0 && m_model.back() == 'X')
-			m_modelid = MODEL_SIGLENT_SDS2000X;
-
-		//FIXME
-		m_maxBandwidth = 200;
-	}
-
 	else
 	{
 		LogWarning("Model \"%s\" is unknown, available sample rates/memory depths may not be properly detected\n",
@@ -381,6 +381,36 @@ void LeCroyOscilloscope::DetectOptions()
 				action = "Enabled";
 			}
 
+			//Memory capacity options for WaveMaster/SDA/DDA 8Zi/Zi-A/Zi-B family
+			else if(o == "-S")
+			{
+				type = "Hardware";
+				desc = "Small (32M point) memory";
+				m_memoryDepthOption = 32;
+				action = "Enabled";
+			}
+			else if(o == "-S")
+			{
+				type = "Hardware";
+				desc = "Medium (64M point) memory";
+				m_memoryDepthOption = 64;
+				action = "Enabled";
+			}
+			else if(o == "-L")
+			{
+				type = "Hardware";
+				desc = "Large (128M point) memory";
+				m_memoryDepthOption = 128;
+				action = "Enabled";
+			}
+			else if(o == "-V")
+			{
+				type = "Hardware";
+				desc = "Very large (256M point) memory";
+				m_memoryDepthOption = 256;
+				action = "Enabled";
+			}
+
 			//Print out full names for protocol trigger options and enable trigger mode.
 			//Note that many of these options don't have _TD in the base (non-TDME) option code!
 			else if(o.find("I2C") == 0)
@@ -471,6 +501,13 @@ void LeCroyOscilloscope::DetectOptions()
 			{
 				type = "Trigger";		//FIXME: Is this just 1080p analog trigger support?
 				desc = "HD analog TV";
+			}
+
+			//High speed serial trigger
+			else if(o == "SERIALPAT_T")
+			{
+				type = "Trigger";
+				desc = "Serial Pattern (8b10b/64b66b/NRZ)";
 			}
 
 			//Protocol decodes without trigger capability
@@ -632,7 +669,7 @@ void LeCroyOscilloscope::DetectOptions()
 				type = "Miscellaneous";
 				desc = "Power Analysis";
 			}
-			else if( (o == "SDA2") || (o == "SDA3") || (o == "SDA3-LINQ") )
+			else if( (o == "SDA") || (o == "SDA2") || (o == "SDA3") || (o == "SDA3-LINQ") || (o == "ASDA") )
 			{
 				type = "Signal Integrity";
 				desc = "Serial Data Analysis";
@@ -732,6 +769,7 @@ void LeCroyOscilloscope::AddDigitalChannels(unsigned int count)
 	* WAVERUNNER8104-MS has 4 channels (plus 16 digital)
 	* DDA5005 / DDA5005A have 4 channels
 	* SDA3010 have 4 channels
+	* SDA8xxZi have 4 channels
 	* LabMaster just calls itself "MCM-Zi-A" and there's no information on the number of modules!
  */
 void LeCroyOscilloscope::DetectAnalogChannels()
@@ -744,6 +782,14 @@ void LeCroyOscilloscope::DetectAnalogChannels()
 		//SDA3010 have 4 channels despite a model number ending in 0
 		case MODEL_DDA_5K:
 		case MODEL_SDA_3K:
+			nchans = 4;
+			break;
+
+		//All SDA / WaveMaster 8Zi have 4 channels
+		case MODEL_SDA_8ZI:
+		case MODEL_SDA_8ZI_A:
+		case MODEL_SDA_8ZI_B:
+		case MODEL_WAVEMASTER_8ZI_B:
 			nchans = 4;
 			break;
 
@@ -1083,7 +1129,6 @@ bool LeCroyOscilloscope::CanEnableChannel(size_t i)
 		case MODEL_WAVEMASTER_8ZI_B:
 		case MODEL_WAVEPRO_HD:
 		case MODEL_WAVERUNNER_9K:
-		case MODEL_SIGLENT_SDS2000X:
 			return (i == 1) || (i == 2) || (i > m_analogChannelCount);
 
 		case MODEL_WAVESURFER_3K:			//TODO: can use ch1 if not 2, and ch3 if not 4
@@ -1136,6 +1181,16 @@ void LeCroyOscilloscope::DisableChannel(size_t i)
 		size_t nchan = i - (m_analogChannelCount+1);
 		m_transport->SendCommand(string("VBS 'app.LogicAnalyzer.Digital1.Digital") + to_string(nchan) + " = 0'");
 	}
+}
+
+vector<OscilloscopeChannel::CouplingType> LeCroyOscilloscope::GetAvailableCouplings(size_t /*i*/)
+{
+	vector<OscilloscopeChannel::CouplingType> ret;
+	ret.push_back(OscilloscopeChannel::COUPLE_DC_1M);
+	ret.push_back(OscilloscopeChannel::COUPLE_AC_1M);
+	ret.push_back(OscilloscopeChannel::COUPLE_DC_50);
+	ret.push_back(OscilloscopeChannel::COUPLE_GND);
+	return ret;
 }
 
 OscilloscopeChannel::CouplingType LeCroyOscilloscope::GetChannelCoupling(size_t i)
@@ -1231,6 +1286,10 @@ void LeCroyOscilloscope::SetChannelAttenuation(size_t i, double atten)
 {
 	if(i >= m_analogChannelCount)
 		return;
+
+	//Get the old coupling value first.
+	//This ensures that m_probeIsActive[i] is valid
+	GetChannelCoupling(i);
 
 	//Don't allow changing attenuation on active probes
 	{
@@ -1348,7 +1407,6 @@ vector<unsigned int> LeCroyOscilloscope::GetChannelBandwidthLimiters(size_t /*i*
 		//Only the default 20/200
 		case MODEL_HDO_4KA:
 		case MODEL_HDO_6KA:
-		case MODEL_SIGLENT_SDS2000X:
 		default:
 			break;
 	}
@@ -1413,6 +1471,190 @@ void LeCroyOscilloscope::SetChannelBandwidthLimit(size_t i, unsigned int limit_m
 		snprintf(cmd, sizeof(cmd), "BANDWIDTH_LIMIT %s,%uMHZ", m_channels[i]->GetHwname().c_str(), limit_mhz);
 
 	m_transport->SendCommand(cmd);
+}
+
+bool LeCroyOscilloscope::CanInvert(size_t i)
+{
+	//All analog channels, and only analog channels, can be inverted
+	return (i < m_analogChannelCount);
+}
+
+void LeCroyOscilloscope::Invert(size_t i, bool invert)
+{
+	if(i >= m_analogChannelCount)
+		return;
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	if(invert)
+		m_transport->SendCommand(string("VBS 'app.Acquisition.") + m_channels[i]->GetHwname() + ".Invert = true'");
+	else
+		m_transport->SendCommand(string("VBS 'app.Acquisition.") + m_channels[i]->GetHwname() + ".Invert = false'");
+}
+
+bool LeCroyOscilloscope::IsInverted(size_t i)
+{
+	if(i >= m_analogChannelCount)
+		return false;
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+	m_transport->SendCommand(string("VBS? 'return = app.Acquisition.") + m_channels[i]->GetHwname() + ".Invert'");
+	auto reply = Trim(m_transport->ReadReply());
+	return (reply == "-1");
+}
+
+string LeCroyOscilloscope::GetProbeName(size_t i)
+{
+	if(i >= m_analogChannelCount)
+		return "";
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	//Step 1: Determine which input is active.
+	//There's always a mux selector in software, even if only one is present on the physical acquisition board
+	string prefix = string("app.Acquisition.") + m_channels[i]->GetHwname();
+	m_transport->SendCommand(string("VBS? 'return = ") + prefix + ".ActiveInput'");
+	string mux = Trim(m_transport->ReadReply());
+
+	//Step 2: Identify the probe connected to this mux channel
+	m_transport->SendCommand(string("VBS? 'return = ") + prefix + "." + mux + ".ProbeName'");
+	string name = Trim(m_transport->ReadReply());
+
+	//API requires empty string if no probe
+	if(name == "None")
+		return "";
+	else
+		return name;
+}
+
+bool LeCroyOscilloscope::CanAutoZero(size_t i)
+{
+	if(i >= m_analogChannelCount)
+		return false;
+
+	auto probe = GetProbeName(i);
+
+	//Per email w/ Honam at Lecroy Apps (TLC#00291415) there is no command to check for autozero capability
+	//So we need to just use heuristics based on known probe names
+
+	//Passive or no probe
+	if(probe.empty())
+		return false;
+
+	//All differential, current, and power rail probes should support auto zeroing
+	else if(probe.find("D") == 0)
+		return true;
+	else if(probe.find("RP") == 0)
+		return true;
+	else if(probe.find("CP") == 0)
+		return true;
+
+	//ZS series single ended probes do not
+	else if(probe.find("ZS") == 0)
+		return false;
+
+	//When in doubt, show the option
+	else
+	{
+		LogWarning(
+			"Probe model \"%s\" is unknown. Guessing auto zero might be available.\n"
+			"Please contact the glscopeclient developers to add your probe to the database and "
+			"eliminate this warning.\n", probe.c_str());
+		return true;
+	}
+}
+
+void LeCroyOscilloscope::AutoZero(size_t i)
+{
+	if(i >= m_analogChannelCount)
+		return;
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	//Get the active input and probe name
+	string prefix = string("app.Acquisition.") + m_channels[i]->GetHwname();
+	m_transport->SendCommand(string("VBS? 'return = ") + prefix + ".ActiveInput'");
+	string mux = Trim(m_transport->ReadReply());
+	m_transport->SendCommand(string("VBS? 'return = ") + prefix + "." + mux + ".ProbeName'");
+	string name = Trim(m_transport->ReadReply());
+
+	m_transport->SendCommand(string("VBS? '") + prefix + "." + mux + "." + name + ".AutoZero'");
+}
+
+bool LeCroyOscilloscope::HasInputMux(size_t i)
+{
+	if(i >= m_analogChannelCount)
+		return false;
+
+	switch(m_modelid)
+	{
+		//Add other models with muxes here
+		case MODEL_SDA_8ZI:
+		case MODEL_SDA_8ZI_A:
+		case MODEL_SDA_8ZI_B:
+		case MODEL_WAVEMASTER_8ZI_B:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+size_t LeCroyOscilloscope::GetInputMuxSetting(size_t i)
+{
+	//If no mux, always report 0
+	if(!HasInputMux(i))
+		return 0;
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	//Get the active input and probe name
+	string prefix = string("app.Acquisition.") + m_channels[i]->GetHwname();
+	m_transport->SendCommand(string("VBS? 'return = ") + prefix + ".ActiveInput'");
+	string mux = Trim(m_transport->ReadReply());
+	if(mux == "InputA")
+		return 0;
+	else if(mux == "InputB")
+		return 1;
+	else
+	{
+		LogWarning("Unknown input mux setting %zu\n", i);
+		return 0;
+	}
+}
+
+vector<string> LeCroyOscilloscope::GetInputMuxNames(size_t i)
+{
+	//All currently supported scopes have this combination
+	vector<string> ret;
+	if(HasInputMux(i))
+	{
+		ret.push_back("A (ProLink, upper)");
+		ret.push_back("B (ProBus, lower)");
+	}
+	return ret;
+}
+
+void LeCroyOscilloscope::SetInputMux(size_t i, size_t select)
+{
+	if(i >= m_analogChannelCount)
+		return;
+
+	if(!HasInputMux(i))
+		return;
+
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	if(select == 0)
+	{
+		m_transport->SendCommand(
+			string("VBS 'app.Acquisition.") + m_channels[i]->GetHwname() + ".ActiveInput = \"InputA\"'");
+	}
+	else
+	{
+		m_transport->SendCommand(
+			string("VBS 'app.Acquisition.") + m_channels[i]->GetHwname() + ".ActiveInput = \"InputB\"'");
+	}
 }
 
 void LeCroyOscilloscope::SetChannelDisplayName(size_t i, string name)
@@ -1833,8 +2075,10 @@ Oscilloscope::TriggerMode LeCroyOscilloscope::PollTrigger()
 	}
 
 	//Stopped, no data available
-	//TODO: how to handle auto / normal trigger mode?
-	return TRIGGER_MODE_RUN;
+	if(m_triggerArmed)
+		return TRIGGER_MODE_RUN;
+	else
+		return TRIGGER_MODE_STOP;
 }
 
 bool LeCroyOscilloscope::ReadWaveformBlock(string& data)
@@ -2058,7 +2302,6 @@ vector<WaveformBase*> LeCroyOscilloscope::ProcessAnalogWaveform(
 	//Parse the wavedesc headers
 	auto pdesc = (unsigned char*)(&wavedesc[0]);
 	//uint32_t wavedesc_len = *reinterpret_cast<uint32_t*>(pdesc + 36);
-	//uint32_t usertext_len = *reinterpret_cast<uint32_t*>(pdesc + 40);
 
 	//cppcheck-suppress invalidPointerCast
 	float v_gain = *reinterpret_cast<float*>(pdesc + 156);
@@ -2094,6 +2337,7 @@ vector<WaveformBase*> LeCroyOscilloscope::ProcessAnalogWaveform(
 
 		cap->m_triggerPhase = h_off_frac;
 		cap->m_startTimestamp = ttime;
+		cap->m_densePacked = true;
 
 		//Parse the time
 		if(num_sequences > 1)
@@ -2104,79 +2348,29 @@ vector<WaveformBase*> LeCroyOscilloscope::ProcessAnalogWaveform(
 		cap->Resize(num_per_segment);
 
 		//Convert raw ADC samples to volts
-		//TODO: Optimized AVX conversion for 16-bit samples
-		float* samps = reinterpret_cast<float*>(&cap->m_samples[0]);
 		if(m_highDefinition)
 		{
-			int16_t* base = wdata + j*num_per_segment;
-
-			for(unsigned int k=0; k<num_per_segment; k++)
-			{
-				cap->m_offsets[k] = k;
-				cap->m_durations[k] = 1;
-				samps[k] = base[k] * v_gain - v_off;
-			}
+			Convert16BitSamples(
+				(int64_t*)&cap->m_offsets[0],
+				(int64_t*)&cap->m_durations[0],
+				(float*)&cap->m_samples[0],
+				wdata + j*num_per_segment,
+				v_gain,
+				v_off,
+				num_per_segment,
+				0);
 		}
 		else
 		{
-			if(g_hasAvx2)
-			{
-				//Divide large waveforms (>1M points) into blocks and multithread them
-				//TODO: tune split
-				if(num_per_segment > 1000000)
-				{
-					//Round blocks to multiples of 32 samples for clean vectorization
-					size_t numblocks = omp_get_max_threads();
-					size_t lastblock = numblocks - 1;
-					size_t blocksize = num_per_segment / numblocks;
-					blocksize = blocksize - (blocksize % 32);
-
-					#pragma omp parallel for
-					for(size_t i=0; i<numblocks; i++)
-					{
-						//Last block gets any extra that didn't divide evenly
-						size_t nsamp = blocksize;
-						if(i == lastblock)
-							nsamp = num_per_segment - i*blocksize;
-
-						Convert8BitSamplesAVX2(
-							(int64_t*)&cap->m_offsets[i*blocksize],
-							(int64_t*)&cap->m_durations[i*blocksize],
-							samps + i*blocksize,
-							bdata + j*num_per_segment + i*blocksize,
-							v_gain,
-							v_off,
-							nsamp,
-							i*blocksize);
-					}
-				}
-
-				//Small waveforms get done single threaded to avoid overhead
-				else
-				{
-					Convert8BitSamplesAVX2(
-						(int64_t*)&cap->m_offsets[0],
-						(int64_t*)&cap->m_durations[0],
-						samps,
-						bdata + j*num_per_segment,
-						v_gain,
-						v_off,
-						num_per_segment,
-						0);
-				}
-			}
-			else
-			{
-				Convert8BitSamples(
-					(int64_t*)&cap->m_offsets[0],
-					(int64_t*)&cap->m_durations[0],
-					samps,
-					bdata + j*num_per_segment,
-					v_gain,
-					v_off,
-					num_per_segment,
-					0);
-			}
+			Convert8BitSamples(
+				(int64_t*)&cap->m_offsets[0],
+				(int64_t*)&cap->m_durations[0],
+				(float*)&cap->m_samples[0],
+				bdata + j*num_per_segment,
+				v_gain,
+				v_off,
+				num_per_segment,
+				0);
 		}
 
 		ret.push_back(cap);
@@ -2185,134 +2379,13 @@ vector<WaveformBase*> LeCroyOscilloscope::ProcessAnalogWaveform(
 	return ret;
 }
 
-/**
-	@brief Converts 8-bit ADC samples to floating point
- */
-void LeCroyOscilloscope::Convert8BitSamples(
-	int64_t* offs, int64_t* durs, float* pout, int8_t* pin, float gain, float offset, size_t count, int64_t ibase)
+map<int, DigitalWaveform*> LeCroyOscilloscope::ProcessDigitalWaveform(string& data, int64_t analog_hoff)
 {
-	for(unsigned int k=0; k<count; k++)
-	{
-		offs[k] = ibase + k;
-		durs[k] = 1;
-		pout[k] = pin[k] * gain - offset;
-	}
-}
+	//DEBUG
+	FILE* fp = fopen("/tmp/waveform.xml", "w");
+	fwrite(data.c_str(), data.length(), 1, fp);
+	fclose(fp);
 
-/**
-	@brief Optimized version of Convert8BitSamples()
- */
-__attribute__((target("avx2")))
-void LeCroyOscilloscope::Convert8BitSamplesAVX2(
-	int64_t* offs, int64_t* durs, float* pout, int8_t* pin, float gain, float offset, size_t count, int64_t ibase)
-{
-	unsigned int end = count - (count % 32);
-
-	int64_t __attribute__ ((aligned(32))) ones_x4[] = {1, 1, 1, 1};
-	int64_t __attribute__ ((aligned(32))) fours_x4[] = {4, 4, 4, 4};
-	int64_t __attribute__ ((aligned(32))) count_x4[] =
-	{
-		ibase + 0,
-		ibase + 1,
-		ibase + 2,
-		ibase + 3
-	};
-
-	__m256i all_ones = _mm256_load_si256(reinterpret_cast<__m256i*>(ones_x4));
-	__m256i all_fours = _mm256_load_si256(reinterpret_cast<__m256i*>(fours_x4));
-	__m256i counts = _mm256_load_si256(reinterpret_cast<__m256i*>(count_x4));
-
-	__m256 gains = { gain, gain, gain, gain, gain, gain, gain, gain };
-	__m256 offsets = { offset, offset, offset, offset, offset, offset, offset, offset };
-
-	for(unsigned int k=0; k<end; k += 32)
-	{
-		//This is likely a lot faster, but assumes we have 64 byte alignment on pin which is not guaranteed.
-		//TODO: fix alignment
-		//__m256i raw_samples = _mm256_load_si256(reinterpret_cast<__m256i*>(pin + k));
-
-		//Load all 32 raw ADC samples, without assuming alignment
-		__m256i raw_samples = _mm256_loadu_si256(reinterpret_cast<__m256i*>(pin + k));
-
-		//Fill duration
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 4), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 8), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 12), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 16), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 20), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 24), all_ones);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(durs + k + 28), all_ones);
-
-		//Extract the low and high 16 samples from the block
-		__m128i block01_x8 = _mm256_extracti128_si256(raw_samples, 0);
-		__m128i block23_x8 = _mm256_extracti128_si256(raw_samples, 1);
-
-		//Swap the low and high halves of these vectors
-		//Ugly casting needed because all permute instrinsics expect float/double datatypes
-		__m128i block10_x8 = _mm_castpd_si128(_mm_permute_pd(_mm_castsi128_pd(block01_x8), 1));
-		__m128i block32_x8 = _mm_castpd_si128(_mm_permute_pd(_mm_castsi128_pd(block23_x8), 1));
-
-		//Divide into blocks of 8 samples and sign extend to 32 bit
-		__m256i block0_int = _mm256_cvtepi8_epi32(block01_x8);
-		__m256i block1_int = _mm256_cvtepi8_epi32(block10_x8);
-		__m256i block2_int = _mm256_cvtepi8_epi32(block23_x8);
-		__m256i block3_int = _mm256_cvtepi8_epi32(block32_x8);
-
-		//Fill offset
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 4), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 8), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 12), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 16), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 20), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 24), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-		_mm256_store_si256(reinterpret_cast<__m256i*>(offs + k + 28), counts);
-		counts = _mm256_add_epi64(counts, all_fours);
-
-		//Convert the 32-bit int blocks to float.
-		//Apparently there's no direct epi8 to ps conversion instruction.
-		__m256 block0_float = _mm256_cvtepi32_ps(block0_int);
-		__m256 block1_float = _mm256_cvtepi32_ps(block1_int);
-		__m256 block2_float = _mm256_cvtepi32_ps(block2_int);
-		__m256 block3_float = _mm256_cvtepi32_ps(block3_int);
-
-		//Woo! We've finally got floating point data. Now we can do the fun part.
-		block0_float = _mm256_mul_ps(block0_float, gains);
-		block1_float = _mm256_mul_ps(block1_float, gains);
-		block2_float = _mm256_mul_ps(block2_float, gains);
-		block3_float = _mm256_mul_ps(block3_float, gains);
-
-		block0_float = _mm256_sub_ps(block0_float, offsets);
-		block1_float = _mm256_sub_ps(block1_float, offsets);
-		block2_float = _mm256_sub_ps(block2_float, offsets);
-		block3_float = _mm256_sub_ps(block3_float, offsets);
-
-		//All done, store back to the output buffer
-		_mm256_store_ps(pout + k, 		block0_float);
-		_mm256_store_ps(pout + k + 8,	block1_float);
-		_mm256_store_ps(pout + k + 16,	block2_float);
-		_mm256_store_ps(pout + k + 24,	block3_float);
-	}
-
-	//Get any extras we didn't get in the SIMD loop
-	for(unsigned int k=end; k<count; k++)
-	{
-		offs[k] = ibase + k;
-		durs[k] = 1;
-		pout[k] = pin[k] * gain - offset;
-	}
-}
-
-map<int, DigitalWaveform*> LeCroyOscilloscope::ProcessDigitalWaveform(string& data)
-{
 	map<int, DigitalWaveform*> ret;
 
 	//See what channels are enabled
@@ -2328,6 +2401,10 @@ map<int, DigitalWaveform*> LeCroyOscilloscope::ProcessDigitalWaveform(string& da
 	tmp = tmp.substr(0, tmp.find("</HorPerStep>"));
 	float interval = atof(tmp.c_str()) * FS_PER_SECOND;
 	//LogDebug("Sample interval: %.2f fs\n", interval);
+
+	tmp = data.substr(data.find("<HorStart>") + 10);
+	tmp = tmp.substr(0, tmp.find("</HorStart>"));
+	float horstart = atof(tmp.c_str()) * FS_PER_SECOND;
 
 	tmp = data.substr(data.find("<NumSamples>") + 12);
 	tmp = tmp.substr(0, tmp.find("</NumSamples>"));
@@ -2370,6 +2447,11 @@ map<int, DigitalWaveform*> LeCroyOscilloscope::ProcessDigitalWaveform(string& da
 	int64_t start_sec = (timestamp - start_ns) / ns_per_sec;
 	time_t start_time = epoch_stamp + start_sec;
 
+	//Figure out delta in trigger time between analog and digital channels
+	int64_t trigger_phase = 0;
+	if(analog_hoff != 0)
+		trigger_phase = horstart - analog_hoff;
+
 	//Pull out the actual binary data (Base64 coded)
 	tmp = data.substr(data.find("<BinaryData>") + 12);
 	tmp = tmp.substr(0, tmp.find("</BinaryData>"));
@@ -2389,10 +2471,12 @@ map<int, DigitalWaveform*> LeCroyOscilloscope::ProcessDigitalWaveform(string& da
 		{
 			DigitalWaveform* cap = new DigitalWaveform;
 			cap->m_timescale = interval;
+			cap->m_densePacked = true;
 
 			//Capture timestamp
 			cap->m_startTimestamp = start_time;
 			cap->m_startFemtoseconds = start_fs;
+			cap->m_triggerPhase = trigger_phase;
 
 			//Preallocate memory assuming no deduplication possible
 			cap->Resize(num_samples);
@@ -2570,6 +2654,9 @@ bool LeCroyOscilloscope::AcquireData()
 		m_triggerArmed = true;
 	}
 
+	//Offset from start of waveform to trigger
+	double analog_hoff = 0;
+
 	//Process analog waveforms
 	vector< vector<WaveformBase*> > waveforms;
 	waveforms.resize(m_analogChannelCount);
@@ -2577,6 +2664,11 @@ bool LeCroyOscilloscope::AcquireData()
 	{
 		if(enabled[i])
 		{
+			//Extract timestamp of waveform
+			auto pdesc = (unsigned char*)(&wavedescs[i][0]);
+			//cppcheck-suppress invalidPointerCast
+			analog_hoff = *reinterpret_cast<double*>(pdesc + 180) * FS_PER_SECOND;
+
 			waveforms[i] = ProcessAnalogWaveform(
 				&analogWaveformData[i][16],			//skip 16-byte SCPI header DATA,\n#9xxxxxxxx
 				analogWaveformData[i].size() - 16,
@@ -2604,7 +2696,7 @@ bool LeCroyOscilloscope::AcquireData()
 	if(denabled)
 	{
 		//This is a weird XML-y format but I can't find any other way to get it :(
-		map<int, DigitalWaveform*> digwaves = ProcessDigitalWaveform(digitalWaveformData);
+		map<int, DigitalWaveform*> digwaves = ProcessDigitalWaveform(digitalWaveformData, analog_hoff);
 
 		//Done, update the data
 		for(auto it : digwaves)
@@ -2651,16 +2743,21 @@ void LeCroyOscilloscope::StartSingleTrigger()
 
 void LeCroyOscilloscope::Stop()
 {
-	{
-		lock_guard<recursive_mutex> lock(m_mutex);
-		m_transport->SendCommand("TRIG_MODE STOP");
-	}
+	lock_guard<recursive_mutex> lock(m_mutex);
+	m_transport->SendCommand("TRIG_MODE STOP");
 
 	m_triggerArmed = false;
 	m_triggerOneShot = true;
+}
 
-	//Clear out any pending data (the user doesn't want it, and we don't want stale stuff hanging around)
-	ClearPendingWaveforms();
+void LeCroyOscilloscope::ForceTrigger()
+{
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	m_triggerArmed = true;
+	m_triggerOneShot = true;
+
+	m_transport->SendCommand("FRTR");
 }
 
 double LeCroyOscilloscope::GetChannelOffset(size_t i)
@@ -2748,153 +2845,180 @@ vector<uint64_t> LeCroyOscilloscope::GetSampleRatesNonInterleaved()
 {
 	vector<uint64_t> ret;
 
-	//Not all scopes can go this slow
-	//TODO: complete list
-	if(m_modelid == MODEL_WAVERUNNER_8K)
-		ret.push_back(1000);
-
 	const int64_t k = 1000;
 	const int64_t m = k*k;
 	const int64_t g = k*m;
 
-	//These rates are supported by all known scopes
-	ret.push_back(2 * k);
-	ret.push_back(5 * k);
-	ret.push_back(10 * k);
-	ret.push_back(20 * k);
-	ret.push_back(50 * k);
-	ret.push_back(100 * k);
-	ret.push_back(200 * k);
-	ret.push_back(500 * k);
-
-	ret.push_back(1 * m);
-	if(m_modelid == MODEL_HDO_9K)		//... with one exception
-		ret.push_back(2500 * k);
-	else
-		ret.push_back(2 * m);
-	ret.push_back(5 * m);
-	ret.push_back(10 * m);
-	ret.push_back(20 * m);
-	ret.push_back(50 * m);
-	ret.push_back(100 * m);
-
-	//Some scopes can go faster
-	switch(m_modelid)
+	if(GetSamplingMode() == EQUIVALENT_TIME)
 	{
-		case MODEL_DDA_5K:
-			ret.push_back(200 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2 * g);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			break;
+		//RIS is 200 Gsps on all known scopes
+		ret.push_back(200 * g);
+	}
 
-		case MODEL_HDO_4KA:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			//no 1 Gsps mode, we go straight from 2.5 Gsps to 500 Msps
-			ret.push_back(2500 * m);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			break;
+	else
+	{
+		//Not all scopes can go this slow
+		//TODO: complete list
+		if(m_modelid == MODEL_WAVERUNNER_8K)
+			ret.push_back(1000);
 
-		case MODEL_HDO_6KA:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1250 * m);
-			ret.push_back(2500 * m);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			break;
+		bool wm8 =
+			(m_modelid == MODEL_WAVEMASTER_8ZI_B) ||
+			(m_modelid == MODEL_SDA_8ZI) ||
+			(m_modelid == MODEL_SDA_8ZI_A) ||
+			(m_modelid == MODEL_SDA_8ZI_B);
+		bool hdo9 = (m_modelid == MODEL_HDO_9K);
 
-		case MODEL_HDO_9K:
-			ret.push_back(200 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2 * g);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			ret.push_back(20 * g);
-			break;
+		//WaveMaster 8Zi can't go below 200 ksps in realtime mode?
+		if(!wm8)
+		{
+			ret.push_back(2 * k);
+			ret.push_back(5 * k);
+			ret.push_back(10 * k);
+			ret.push_back(20 * k);
+			ret.push_back(50 * k);
+			ret.push_back(100 * k);
+		}
+		ret.push_back(200 * k);
+		if(wm8)
+			ret.push_back(250 * k);
+		ret.push_back(500 * k);
 
-		case MODEL_LABMASTER_ZI_A:
-			ret.push_back(200 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2 * g);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			ret.push_back(20 * g);		//FIXME: 20 and 40 Gsps give garbage data in the MAUI Studio simulator.
-			ret.push_back(40 * g);		//Data looks wrong in MAUI as well as glscopeclient so doesn't seem to be something
-										//that we did. Looks like bits and pieces of waveform with gaps or overlap.
-										//Unclear if sim bug or actual issue, no testing on actual LabMaster hardware
-										//has been performed to date.
-			ret.push_back(80 * g);
-			//TODO: exact sample rates may depend on the acquisition module(s) connected
-			break;
+		ret.push_back(1 * m);
+		if(hdo9 || wm8)
+			ret.push_back(2500 * k);
+		else
+			ret.push_back(2 * m);
+		ret.push_back(5 * m);
+		ret.push_back(10 * m);
+		if(wm8)
+			ret.push_back(25 * m);
+		else
+			ret.push_back(20 * m);
+		ret.push_back(50 * m);
+		ret.push_back(100 * m);
 
-		case MODEL_MDA_800:
-			ret.push_back(200 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1250 * m);
-			ret.push_back(2500 * m);
-			ret.push_back(10 * g);
-			break;
+		//Some scopes can go faster
+		switch(m_modelid)
+		{
+			case MODEL_DDA_5K:
+				ret.push_back(200 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2 * g);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				break;
 
-		case MODEL_WAVEMASTER_8ZI_B:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2500 * m);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			ret.push_back(20 * g);
-			ret.push_back(40 * g);
-			break;
+			case MODEL_HDO_4KA:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				//no 1 Gsps mode, we go straight from 2.5 Gsps to 500 Msps
+				ret.push_back(2500 * m);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				break;
 
-		case MODEL_WAVEPRO_HD:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2500 * m);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			break;
+			case MODEL_HDO_6KA:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1250 * m);
+				ret.push_back(2500 * m);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				break;
 
-		case MODEL_WAVERUNNER_8K:
-			ret.push_back(200 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2 * g);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			if(m_hasFastSampleRate)
+			case MODEL_HDO_9K:
+				ret.push_back(200 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2 * g);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
 				ret.push_back(20 * g);
-			break;
+				break;
 
-		case MODEL_WAVERUNNER_8K_HD:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1250 * m);
-			ret.push_back(2500 * m);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			break;
+			case MODEL_LABMASTER_ZI_A:
+				ret.push_back(200 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2 * g);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				ret.push_back(20 * g);		//FIXME: 20 and 40 Gsps give garbage data in the MAUI Studio simulator.
+				ret.push_back(40 * g);		//Data looks wrong in MAUI as well as glscopeclient so doesn't seem to be something
+											//that we did. Looks like bits and pieces of waveform with gaps or overlap.
+											//Unclear if sim bug or actual issue, no testing on actual LabMaster hardware
+											//has been performed to date.
+				ret.push_back(80 * g);
+				//TODO: exact sample rates may depend on the acquisition module(s) connected
+				break;
 
-		case MODEL_WAVERUNNER_9K:
-			ret.push_back(250 * m);
-			ret.push_back(500 * m);
-			ret.push_back(1 * g);
-			ret.push_back(2 * g);
-			ret.push_back(5 * g);
-			ret.push_back(10 * g);
-			if(m_hasFastSampleRate)
+			case MODEL_MDA_800:
+				ret.push_back(200 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1250 * m);
+				ret.push_back(2500 * m);
+				ret.push_back(10 * g);
+				break;
+
+			case MODEL_SDA_8ZI:
+			case MODEL_SDA_8ZI_A:
+			case MODEL_SDA_8ZI_B:
+			case MODEL_WAVEMASTER_8ZI_B:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2500 * m);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
 				ret.push_back(20 * g);
-			break;
+				ret.push_back(40 * g);
+				break;
 
-		default:
-			break;
+			case MODEL_WAVEPRO_HD:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2500 * m);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				break;
+
+			case MODEL_WAVERUNNER_8K:
+				ret.push_back(200 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2 * g);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				if(m_hasFastSampleRate)
+					ret.push_back(20 * g);
+				break;
+
+			case MODEL_WAVERUNNER_8K_HD:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1250 * m);
+				ret.push_back(2500 * m);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				break;
+
+			case MODEL_WAVERUNNER_9K:
+				ret.push_back(250 * m);
+				ret.push_back(500 * m);
+				ret.push_back(1 * g);
+				ret.push_back(2 * g);
+				ret.push_back(5 * g);
+				ret.push_back(10 * g);
+				if(m_hasFastSampleRate)
+					ret.push_back(20 * g);
+				break;
+
+			default:
+				break;
+		}
 	}
 
 	return ret;
@@ -2935,114 +3059,141 @@ vector<uint64_t> LeCroyOscilloscope::GetSampleDepthsNonInterleaved()
 	//The front panel allows going as low as 2 samples on some instruments, but don't allow that here.
 	ret.push_back(500);
 	ret.push_back(1 * k);
+	ret.push_back(2500);
 	ret.push_back(2 * k);
 	ret.push_back(5 * k);
 	ret.push_back(10 * k);
-	ret.push_back(20 * k);
-	ret.push_back(40 * k);			//20/40 Gsps scopes can use values other than 1/2/5.
-									//TODO: figure out which models allow this
-	ret.push_back(50 * k);
-	ret.push_back(80 * k);
-	ret.push_back(100 * k);
-	ret.push_back(200 * k);
-	ret.push_back(250 * k);
-	ret.push_back(400 * k);
-	ret.push_back(500 * k);
 
-	ret.push_back(1 * m);
-	ret.push_back(2 * m);
-	ret.push_back(5 * m);
-	ret.push_back(10 * m);
+	if(GetSamplingMode() == EQUIVALENT_TIME)
+		ret.push_back(20 * k);
 
-	switch(m_modelid)
+	else
 	{
-		//TODO: are there any options between 10M and 24M? is there a 20M?
-		//TODO: XXL option gives 48M
-		case MODEL_DDA_5K:
-			ret.push_back(24 * m);
-			break;
+		ret.push_back(25 * k);
+		ret.push_back(20 * k);
+		ret.push_back(40 * k);			//20/40 Gsps scopes can use values other than 1/2/5.
+										//TODO: available rates seems to depend on the selected sample rate??
+		ret.push_back(50 * k);
+		ret.push_back(80 * k);
+		ret.push_back(100 * k);
+		ret.push_back(200 * k);
+		ret.push_back(250 * k);
+		ret.push_back(400 * k);
+		ret.push_back(500 * k);
 
-		//VERY limited range of depths here
-		case MODEL_HDO_4KA:
-			ret.clear();
-			ret.push_back(500);
-			ret.push_back(10 * k);
-			ret.push_back(100 * k);
-			ret.push_back(1 * m);
-			ret.push_back(2500 * k);
-			ret.push_back(5 * m);
-			ret.push_back(10 * m);
-			ret.push_back(12500 * k);
-			break;
+		ret.push_back(1 * m);
+		ret.push_back(2500 * k);
+		ret.push_back(2 * m);
+		ret.push_back(5 * m);
+		ret.push_back(10 * m);
 
-		case MODEL_HDO_6KA:
-			ret.push_back(25 * m);
-			ret.push_back(50 * m);
-			break;
+		switch(m_modelid)
+		{
+			//TODO: are there any options between 10M and 24M? is there a 20M?
+			//TODO: XXL option gives 48M
+			case MODEL_DDA_5K:
+				ret.push_back(24 * m);
+				break;
 
-		//TODO: seems like we can have multiples of 400 instead of 500 sometimes?
-		case MODEL_HDO_9K:
-			ret.push_back(25 * m);
-			ret.push_back(50 * m);
-			ret.push_back(64 * m);
-			break;
+			//VERY limited range of depths here
+			case MODEL_HDO_4KA:
+				ret.clear();
+				ret.push_back(500);
+				ret.push_back(10 * k);
+				ret.push_back(100 * k);
+				ret.push_back(1 * m);
+				ret.push_back(2500 * k);
+				ret.push_back(5 * m);
+				ret.push_back(10 * m);
+				ret.push_back(12500 * k);
+				break;
 
-		//standard memory, are there options to increase this?
-		case MODEL_LABMASTER_ZI_A:
-			ret.push_back(20 * m);
-			break;
-
-		case MODEL_MDA_800:
-			ret.push_back(25 * m);
-			ret.push_back(50 * m);
-			break;
-
-		//standard memory
-		case MODEL_WAVEMASTER_8ZI_B:
-			break;
-
-		case MODEL_WAVEPRO_HD:
-			ret.push_back(25 * m);
-
-			if(m_memoryDepthOption >= 100)
+			case MODEL_HDO_6KA:
+				ret.push_back(25 * m);
 				ret.push_back(50 * m);
-			break;
+				break;
 
-		case MODEL_WAVERUNNER_8K_HD:
-			ret.push_back(25 * m);
-			ret.push_back(50 * m);
-
-			//FIXME: largest depth is 2-channel mode only
-			//Second largest is 2/4 channel mode only
-			//All others can be used in 8 channel
-			ret.push_back(100 * m);
-
-			if(m_memoryDepthOption >= 200)
-				ret.push_back(200 * m);
-			if(m_memoryDepthOption >= 500)
-				ret.push_back(500 * m);
-			if(m_memoryDepthOption >= 1000)
-				ret.push_back(1000 * m);
-			if(m_memoryDepthOption >= 2000)
-				ret.push_back(2000 * m);
-			if(m_memoryDepthOption >= 5000)
-				ret.push_back(5000 * m);
-			break;
-
-		//deep memory option gives us 4x the capacity
-		case MODEL_WAVERUNNER_8K:
-		case MODEL_WAVERUNNER_9K:
-			ret.push_back(16 * m);
-			if(m_memoryDepthOption == 128)
-			{
-				ret.push_back(32 * m);
+			//TODO: seems like we can have multiples of 400 instead of 500 sometimes?
+			case MODEL_HDO_9K:
+				ret.push_back(25 * m);
+				ret.push_back(50 * m);
 				ret.push_back(64 * m);
-			}
-			break;
+				break;
 
-		//TODO: add more models here
-		default:
-			break;
+			//standard memory, are there options to increase this?
+			case MODEL_LABMASTER_ZI_A:
+				ret.push_back(20 * m);
+				break;
+
+			case MODEL_MDA_800:
+				ret.push_back(25 * m);
+				ret.push_back(50 * m);
+				break;
+
+			//standard memory
+			//TODO: extended options
+			case MODEL_WAVEMASTER_8ZI_B:
+				break;
+
+			//extended memory
+			case MODEL_SDA_8ZI:
+			case MODEL_SDA_8ZI_A:
+			case MODEL_SDA_8ZI_B:
+				ret.insert(ret.begin()+4, 4*k);
+
+				ret.push_back(20 * m);
+				ret.push_back(25 * m);
+				ret.push_back(40 * m);
+				ret.push_back(50 * m);
+				ret.push_back(80 * m);
+				ret.push_back(100 * m);
+				ret.push_back(128 * m);
+				break;
+
+
+			case MODEL_WAVEPRO_HD:
+				ret.push_back(25 * m);
+
+				if(m_memoryDepthOption >= 100)
+					ret.push_back(50 * m);
+				break;
+
+			case MODEL_WAVERUNNER_8K_HD:
+				ret.push_back(25 * m);
+				ret.push_back(50 * m);
+
+				//FIXME: largest depth is 2-channel mode only
+				//Second largest is 2/4 channel mode only
+				//All others can be used in 8 channel
+				ret.push_back(100 * m);
+
+				if(m_memoryDepthOption >= 200)
+					ret.push_back(200 * m);
+				if(m_memoryDepthOption >= 500)
+					ret.push_back(500 * m);
+				if(m_memoryDepthOption >= 1000)
+					ret.push_back(1000 * m);
+				if(m_memoryDepthOption >= 2000)
+					ret.push_back(2000 * m);
+				if(m_memoryDepthOption >= 5000)
+					ret.push_back(5000 * m);
+				break;
+
+			//deep memory option gives us 4x the capacity
+			case MODEL_WAVERUNNER_8K:
+			case MODEL_WAVERUNNER_9K:
+				ret.push_back(16 * m);
+				if(m_memoryDepthOption == 128)
+				{
+					ret.push_back(32 * m);
+					ret.push_back(64 * m);
+				}
+				break;
+
+			//TODO: add more models here
+			default:
+				break;
+		}
 	}
 
 	return ret;
@@ -3360,6 +3511,74 @@ bool LeCroyOscilloscope::SetInterleaving(bool combine)
 	}
 
 	return m_interleaving;
+}
+
+bool LeCroyOscilloscope::IsSamplingModeAvailable(SamplingMode mode)
+{
+	switch(mode)
+	{
+		case EQUIVALENT_TIME:
+
+			//RIS mode is only available with <20K point memory depth
+			if(GetSampleDepth() > 20000)
+				return false;
+
+			else
+				return true;
+
+		case REAL_TIME:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+LeCroyOscilloscope::SamplingMode LeCroyOscilloscope::GetSamplingMode()
+{
+	lock_guard<recursive_mutex> lock(m_mutex);
+
+	m_transport->SendCommand("VBS? 'return = app.Acquisition.Horizontal.SampleMode'");
+	string reply = Trim(m_transport->ReadReply());
+
+	if(reply == "RealTime")
+		return REAL_TIME;
+	else if(reply == "RIS")
+		return EQUIVALENT_TIME;
+
+	//sequence mode is still real time
+	else
+		return REAL_TIME;
+}
+
+void LeCroyOscilloscope::SetSamplingMode(SamplingMode mode)
+{
+	//Send the command to the scope
+	{
+		lock_guard<recursive_mutex> lock(m_mutex);
+		switch(mode)
+		{
+			case REAL_TIME:
+
+				//Select 10ns/div
+				m_transport->SendCommand(
+					string("VBS? 'app.Acquisition.Horizontal.HorScale = ") + to_string_sci(1e-8) + "'");
+
+				//Select sample mode after changing scale
+				m_transport->SendCommand("VBS? 'app.Acquisition.Horizontal.SampleMode = \"RealTime\"'");
+				break;
+
+			case EQUIVALENT_TIME:
+				m_transport->SendCommand("VBS? 'app.Acquisition.Horizontal.SampleMode = \"RIS\"'");
+				break;
+		}
+	}
+
+	lock_guard<recursive_mutex> lock(m_cacheMutex);
+	m_sampleRateValid = false;
+	m_memoryDepthValid = false;
+	m_interleaving = false;
+	m_interleavingValid = true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4194,6 +4413,11 @@ void LeCroyOscilloscope::PushUartTrigger(UartTrigger* trig)
 
 		case UartTrigger::PARITY_EVEN:
 			m_transport->SendCommand("VBS? 'app.Acquisition.Trigger.Serial.UART.ParityType = \"Even\"");
+			break;
+
+		case UartTrigger::PARITY_MARK:
+		case UartTrigger::PARITY_SPACE:
+			LogWarning("LeCroy UART trigger does not support mark or space parity\n");
 			break;
 	}
 

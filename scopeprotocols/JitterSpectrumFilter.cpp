@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -56,6 +56,21 @@ JitterSpectrumFilter::~JitterSpectrumFilter()
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Factory methods
 
+bool JitterSpectrumFilter::ValidateChannel(size_t i, StreamDescriptor stream)
+{
+	if(stream.m_channel == NULL)
+		return false;
+
+	if( (i == 0) &&
+		(stream.m_channel->GetType() == OscilloscopeChannel::CHANNEL_TYPE_ANALOG) &&
+		(stream.m_channel->GetYAxisUnits() == Unit::UNIT_FS)
+		)
+	{
+		return true;
+	}
+
+	return false;
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Accessors
@@ -78,8 +93,10 @@ void JitterSpectrumFilter::SetDefaultName()
 
 size_t JitterSpectrumFilter::EstimateUIWidth(AnalogWaveform* din)
 {
-	//Make a histogram of sample durations
+	//Make a histogram of sample durations.
+	//Sample no more than 5K UIs since this is just a rough estimate.
 	size_t inlen = din->m_samples.size();
+	inlen = min(inlen, (size_t)5000);
 	map<int64_t, size_t> durations;
 	int64_t maxdur = 0;
 	for(size_t i=0; i<inlen; i++)
@@ -171,7 +188,7 @@ void JitterSpectrumFilter::Refresh()
 	//Loop over the input and copy samples.
 	//If we have runs of identical bits, extend the same jitter value.
 	//TODO: interpolate?
-	vector<float, AlignedAllocator<float, 64>> extended_samples;
+	vector<EmptyConstructorWrapper<float>, AlignedAllocator<EmptyConstructorWrapper<float>, 64>> extended_samples;
 	extended_samples.reserve(inlen);
 	for(size_t i=0; i<inlen; i++)
 	{
@@ -190,7 +207,7 @@ void JitterSpectrumFilter::Refresh()
 
 	//Round size up to next power of two
 	const size_t npoints_raw = extended_samples.size();
-	const size_t npoints = pow(2, ceil(log2(npoints_raw)));
+	const size_t npoints = next_pow2(npoints_raw);
 	LogTrace("JitterSpectrumFilter: processing %zu raw points\n", npoints_raw);
 	LogTrace("Rounded to %zu\n", npoints);
 
@@ -199,14 +216,6 @@ void JitterSpectrumFilter::Refresh()
 	if(m_cachedNumPoints != npoints_raw)
 		ReallocateBuffers(npoints_raw, npoints, nouts);
 
-	//Copy the input with windowing, then zero pad to the desired input length
-	ApplyWindow(
-		&extended_samples[0],
-		npoints_raw,
-		m_rdin,
-		static_cast<WindowFunction>(m_parameters[m_windowName].GetIntVal()));
-	memset(m_rdin + npoints_raw, 0, (npoints - npoints_raw) * sizeof(float));
-
 	//and do the actual FFT processing
-	DoRefresh(din, ui_width_final, npoints, nouts, false);
+	DoRefresh(din, extended_samples, ui_width_final, npoints, nouts, false);
 }

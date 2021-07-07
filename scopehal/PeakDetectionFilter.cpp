@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopehal v0.1                                                                                                     *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -48,11 +48,14 @@ PeakDetector::~PeakDetector()
 void PeakDetector::FindPeaks(AnalogWaveform* cap, int64_t max_peaks, float search_hz)
 {
 	size_t nouts = cap->m_samples.size();
-	if(max_peaks > 0)
+	if(max_peaks == 0)
+		m_peaks.clear();
+	else
 	{
 		//Get peak search width in bins
 		int64_t search_bins = ceil(search_hz / cap->m_timescale);
 		int64_t search_rad = search_bins/2;
+		search_rad = max(search_rad, (int64_t)1);
 
 		//Find peaks (TODO: can we vectorize/multithread this?)
 		//Start at index 1 so we don't waste a marker on the DC peak
@@ -62,8 +65,9 @@ void PeakDetector::FindPeaks(AnalogWaveform* cap, int64_t max_peaks, float searc
 		for(ssize_t i=minpeak; i<(ssize_t)nouts; i++)
 		{
 			//Locate the peak
-			ssize_t left = max((ssize_t)minpeak, i - search_rad);
-			ssize_t right = min(i + search_rad, (ssize_t)nend);
+			ssize_t left = max((ssize_t)minpeak, (ssize_t)(i - search_rad));
+			ssize_t right = min((ssize_t)(i + search_rad), (ssize_t)nend);
+
 			float target = cap->m_samples[i];
 			bool is_peak = true;
 			for(ssize_t j=left; j<=right; j++)
@@ -88,7 +92,7 @@ void PeakDetector::FindPeaks(AnalogWaveform* cap, int64_t max_peaks, float searc
 			//Do a weighted average of our immediate neighbors to fine tune our position
 			ssize_t fine_rad = 10;
 			left = max((ssize_t)1, i - fine_rad);
-			right = min(i + fine_rad, (ssize_t)nouts);
+			right = min(i + fine_rad, (ssize_t)nouts-1);
 			//LogDebug("peak range: %zu, %zu\n", left, right);
 			double total = 0;
 			double count = 0;
@@ -114,6 +118,7 @@ void PeakDetector::FindPeaks(AnalogWaveform* cap, int64_t max_peaks, float searc
 		for(size_t i=0; i<(size_t)max_peaks && i<peaks.size(); i++)
 			m_peaks.push_back(peaks[i]);
 	}
+
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

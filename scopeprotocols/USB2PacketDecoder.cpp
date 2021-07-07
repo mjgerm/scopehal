@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -424,6 +424,9 @@ void USB2PacketDecoder::FindPackets(USB2PacketWaveform* cap)
 	ClearPackets();
 
 	//Stop when we have no chance of fitting a full packet
+	if(cap->m_samples.size() < 2)
+		return;
+
 	for(size_t i=0; i<cap->m_samples.size() - 2;)
 	{
 		//Every packet should start with a PID. Discard unknown garbage.
@@ -577,6 +580,7 @@ void USB2PacketDecoder::DecodeSetup(USB2PacketWaveform* cap, size_t istart, size
 	Packet* pack = new Packet;
 	pack->m_offset = cap->m_offsets[istart] * cap->m_timescale;
 	pack->m_headers["Type"] = "SETUP";
+	pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_CONTROL];
 	char tmp[256];
 	snprintf(tmp, sizeof(tmp), "%d", saddr.m_data);
 	pack->m_headers["Device"] = tmp;
@@ -707,9 +711,15 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 		Packet* pack = new Packet;
 		pack->m_offset = cap->m_offsets[istart] * cap->m_timescale;
 		if( (cap->m_samples[istart].m_data & 0xf) == USB2PacketSymbol::PID_IN)
+		{
 			pack->m_headers["Type"] = "IN";
+			pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_DATA_READ];
+		}
 		else
+		{
 			pack->m_headers["Type"] = "OUT";
+			pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_DATA_WRITE];
+		}
 		snprintf(tmp, sizeof(tmp), "%d", saddr.m_data);
 		pack->m_headers["Device"] = tmp;
 		snprintf(tmp, sizeof(tmp), "%d", sendp.m_data);
@@ -732,6 +742,7 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 		Packet* pack = new Packet;
 		pack->m_offset = cap->m_offsets[istart] * cap->m_timescale;
 		pack->m_headers["Details"] = "ERROR";
+		pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_ERROR];
 		m_packets.push_back(pack);
 		return;
 	}
@@ -740,9 +751,15 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 	Packet* pack = new Packet;
 	pack->m_offset = cap->m_offsets[istart] * cap->m_timescale;
 	if( (cap->m_samples[istart].m_data & 0xf) == USB2PacketSymbol::PID_IN)
+	{
 		pack->m_headers["Type"] = "IN";
+		pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_DATA_READ];
+	}
 	else
+	{
 		pack->m_headers["Type"] = "OUT";
+		pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_DATA_WRITE];
+	}
 	snprintf(tmp, sizeof(tmp), "%d", saddr.m_data);
 	pack->m_headers["Device"] = tmp;
 	snprintf(tmp, sizeof(tmp), "%d", sendp.m_data);
@@ -759,7 +776,16 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 
 		//Next should be a CRC16
 		else if(s.m_type == USB2PacketSymbol::TYPE_CRC16_GOOD)
+		{
+			i++;
 			break;
+		}
+		else if(s.m_type == USB2PacketSymbol::TYPE_CRC16_BAD)
+		{
+			i++;
+			pack->m_displayBackgroundColor = m_backgroundColors[PROTO_COLOR_ERROR];
+			break;
+		}
 
 		i++;
 	}
@@ -771,7 +797,7 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 		return;
 	}
 	string ack = "";
-	auto sack = cap->m_samples[i++];
+	auto sack = cap->m_samples[i];
 	if(sack.m_type == USB2PacketSymbol::TYPE_PID)
 	{
 		if( (sack.m_data & 0xf) == USB2PacketSymbol::PID_ACK)
@@ -790,6 +816,7 @@ void USB2PacketDecoder::DecodeData(USB2PacketWaveform* cap, size_t istart, size_
 	}
 
 	pack->m_len = ((cap->m_offsets[i] + cap->m_durations[i]) * cap->m_timescale) - pack->m_offset;
+	i++;
 
 	//Format the data
 	string details = "";

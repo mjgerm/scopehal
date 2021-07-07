@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -54,6 +54,7 @@ EmphasisRemovalFilter::EmphasisRemovalFilter(const string& color)
 
 	m_parameters[m_emphasisTypeName] = FilterParameter(FilterParameter::TYPE_ENUM, Unit(Unit::UNIT_COUNTS));
 	m_parameters[m_emphasisTypeName].AddEnumValue("De-emphasis", DE_EMPHASIS);
+	m_parameters[m_emphasisTypeName].AddEnumValue("Pre-emphasis", PRE_EMPHASIS);
 	m_parameters[m_emphasisTypeName].SetIntVal(DE_EMPHASIS);
 
 	m_parameters[m_emphasisAmountName] = FilterParameter(FilterParameter::TYPE_FLOAT, Unit(Unit::UNIT_DB));
@@ -132,13 +133,6 @@ void EmphasisRemovalFilter::Refresh()
 		return;
 	}
 
-	//Only de-emphasis is implemented for now
-	if(m_parameters[m_emphasisTypeName].GetIntVal() != DE_EMPHASIS)
-	{
-		SetData(NULL, 0);
-		return;
-	}
-
 	//Get the input data
 	auto din = GetAnalogInputWaveform(0);
 	size_t len = din->m_samples.size();
@@ -151,20 +145,16 @@ void EmphasisRemovalFilter::Refresh()
 	m_yAxisUnit = m_inputs[0].m_channel->GetYAxisUnits();
 
 	//Set up output
-	auto cap = new AnalogWaveform;
-	cap->m_timescale = din->m_timescale;
-	cap->m_startTimestamp = din->m_startTimestamp;
-	cap->m_startFemtoseconds = din->m_startFemtoseconds;
-	SetData(cap, 0);
-
-	//Convert data rate to tap delay
+	const int64_t tap_count = 8;
 	int64_t tap_delay = round(FS_PER_SECOND / m_parameters[m_dataRateName].GetFloatVal());
+	int64_t samples_per_tap = tap_delay / din->m_timescale;
+	auto cap = SetupOutputWaveform(din, 0, tap_count * samples_per_tap, 0);
 
 	//Calculate the tap values
 	//Reference: "Dealing with De-Emphasis in Jitter Testing", P. Pupalaikis, LeCroy technical brief, 2008
-	const int64_t tap_count = 8;
 	float db = m_parameters[m_emphasisAmountName].GetFloatVal();
-	float coeff = 0.5 * pow(10, -db/20);
+	float emphasisLevel = pow(10, -db/20);
+	float coeff = 0.5 * emphasisLevel;
 	float c = coeff + 0.5;
 	float p = coeff - 0.5;
 	float p_over_c = p / c;
@@ -174,10 +164,18 @@ void EmphasisRemovalFilter::Refresh()
 	for(int64_t i=1; i<tap_count; i++)
 		taps[i] = -p_over_c * taps[i-1];
 
+	//If we're doing pre-emphasis rather than de-emphasis, we need to scale everything accordingly.
+	auto type = static_cast<EmphasisType>(m_parameters[m_emphasisTypeName].GetIntVal());
+	if(type == PRE_EMPHASIS)
+	{
+		for(int64_t i=0; i<tap_count; i++)
+			taps[i] *= emphasisLevel;
+	}
+
 	//Run the actual filter
 	float vmin;
 	float vmax;
-	TappedDelayLineFilter::DoFilterKernel(tap_count, tap_delay, taps, din, cap, vmin, vmax);
+	TappedDelayLineFilter::DoFilterKernel(tap_delay, taps, din, cap, vmin, vmax);
 
 	//Calculate bounds
 	m_max = max(m_max, vmax);

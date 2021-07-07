@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -128,7 +128,7 @@ void DutyCycleMeasurement::Refresh()
 	float midpoint = GetAvgVoltage(din);
 
 	//Timestamps of the edges
-	vector<double> edges;
+	vector<int64_t> edges;
 	FindZeroCrossings(din, midpoint, edges);
 	if(edges.size() < 2)
 	{
@@ -146,9 +146,9 @@ void DutyCycleMeasurement::Refresh()
 	for(size_t i=0; i < (elen - 2); i+= 2)
 	{
 		//measure from edge to 2 edges later, since we find all zero crossings regardless of polarity
-		double start = edges[i];
-		double mid = edges[i+1];
-		double end = edges[i+2];
+		int64_t start = edges[i];
+		int64_t mid = edges[i+1];
+		int64_t end = edges[i+2];
 
 		double t1 = mid-start;
 		double t2 = end-mid;

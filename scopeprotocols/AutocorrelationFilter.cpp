@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopeprotocols                                                                                                    *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -45,7 +45,7 @@ AutocorrelationFilter::AutocorrelationFilter(const string& color)
 	m_offset = 0;
 
 	m_maxDeltaName = "Max offset";
-	m_parameters[m_maxDeltaName] = FilterParameter(FilterParameter::TYPE_INT, Unit(Unit::UNIT_VOLTS));
+	m_parameters[m_maxDeltaName] = FilterParameter(FilterParameter::TYPE_INT, Unit(Unit::UNIT_SAMPLEDEPTH));
 	m_parameters[m_maxDeltaName].SetIntVal(1000);
 }
 

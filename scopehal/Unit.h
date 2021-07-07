@@ -1,8 +1,8 @@
 /***********************************************************************************************************************
 *                                                                                                                      *
-* ANTIKERNEL v0.1                                                                                                      *
+* libscopehal v0.1                                                                                                     *
 *                                                                                                                      *
-* Copyright (c) 2012-2020 Andrew D. Zonenberg                                                                          *
+* Copyright (c) 2012-2021 Andrew D. Zonenberg and contributors                                                         *
 * All rights reserved.                                                                                                 *
 *                                                                                                                      *
 * Redistribution and use in source and binary forms, with or without modification, are permitted provided that the     *
@@ -68,6 +68,7 @@ public:
 		UNIT_DEGREES,		//Angular degrees
 		UNIT_RPM,			//Revolutions per minute
 		UNIT_CELSIUS,		//Degrees Celsius
+		UNIT_RHO,			//Reflection coefficient (dimensionless ratio)
 
 		UNIT_MILLIVOLTS,	//Hack needed for voltage in the X axis since we use integer coordinates there
 
@@ -95,8 +96,31 @@ public:
 
 	Unit operator*(const Unit& rhs);
 
+	static void SetLocale(const char* locale);
+
 protected:
 	UnitType m_type;
+
+#ifdef _WIN32
+	/**
+		@brief String form of m_locale for use on Windows
+	 */
+	static std::string m_slocale;
+
+#else
+	/**
+		@brief The user's requested locale for display
+	 */
+	static locale_t m_locale;
+
+	/**
+		@brief Handle to the "C" locale, used for interchange
+	 */
+	static locale_t m_defaultLocale;
+#endif
+
+	static void SetPrintingLocale();
+	static void SetDefaultLocale();
 };
 
 #endif
